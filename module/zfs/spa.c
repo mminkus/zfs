@@ -4797,11 +4797,22 @@ spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 	/*
 	 * If the pool has an unsupported version we can't open it.
 	 */
+	// if (!SPA_VERSION_IS_SUPPORTED(ub->ub_version)) {
+	// 	nvlist_free(label);
+	// 	spa_load_failed(spa, "version %llu is not supported",
+	// 	    (u_longlong_t)ub->ub_version);
+	// 	return (spa_vdev_err(rvd, VDEV_AUX_VERSION_NEWER, ENOTSUP));
+	// }
 	if (!SPA_VERSION_IS_SUPPORTED(ub->ub_version)) {
-		nvlist_free(label);
-		spa_load_failed(spa, "version %llu is not supported",
-		    (u_longlong_t)ub->ub_version);
-		return (spa_vdev_err(rvd, VDEV_AUX_VERSION_NEWER, ENOTSUP));
+		if (spa->spa_import_flags & ZFS_IMPORT_SKIP_MMP) {
+			spa_load_note(spa, "Forensic override: ignoring unsupported version %llu",
+				(u_longlong_t)ub->ub_version);
+		} else {
+			nvlist_free(label);
+			spa_load_failed(spa, "version %llu is not supported",
+				(u_longlong_t)ub->ub_version);
+			return (spa_vdev_err(rvd, VDEV_AUX_VERSION_NEWER, ENOTSUP));
+		}
 	}
 
 	if (ub->ub_version >= SPA_VERSION_FEATURES) {
