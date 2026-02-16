@@ -4147,17 +4147,40 @@ out:
 static void
 count_dir_mos_objects(dsl_dir_t *dd)
 {
+	dsl_dir_phys_t *ddp = dsl_dir_phys(dd);
+
 	mos_obj_refd(dd->dd_object);
-	mos_obj_refd(dsl_dir_phys(dd)->dd_child_dir_zapobj);
-	mos_obj_refd(dsl_dir_phys(dd)->dd_deleg_zapobj);
-	mos_obj_refd(dsl_dir_phys(dd)->dd_props_zapobj);
-	mos_obj_refd(dsl_dir_phys(dd)->dd_clones);
+	mos_obj_refd(ddp->dd_child_dir_zapobj);
+	mos_obj_refd(ddp->dd_deleg_zapobj);
+	mos_obj_refd(ddp->dd_props_zapobj);
+	mos_obj_refd(ddp->dd_clones);
 
 	/*
 	 * The dd_crypto_obj can be referenced by multiple dsl_dir's.
 	 * Ignore the references after the first one.
 	 */
 	mos_obj_refd_multiple(dd->dd_crypto_obj);
+
+	/*
+	 * Oracle versioned pools (e.g. pool v30 encryption) may stash a
+	 * keychain object reference in one of the reserved dsl_dir_phys_t
+	 * pad slots.  If present, count it to avoid false MOS leak reports.
+	 */
+	if (!SPA_VERSION_IS_SUPPORTED(spa_version(dd->dd_pool->dp_spa))) {
+		objset_t *mos = dd->dd_pool->dp_meta_objset;
+
+		for (size_t i = 0; i < ARRAY_SIZE(ddp->dd_pad); i++) {
+			dmu_object_info_t doi;
+			uint64_t obj = ddp->dd_pad[i];
+
+			if (obj == 0)
+				continue;
+			if (dmu_object_info(mos, obj, &doi) != 0)
+				continue;
+			if (doi.doi_type == ZDB_OT_ORACLE_DSL_KEYCHAIN)
+				mos_obj_refd_multiple(obj);
+		}
+	}
 }
 
 static void
@@ -8535,16 +8558,16 @@ dump_mos_leaks(spa_t *spa)
 			dmu_object_info_t doi;
 			const char *name;
 			VERIFY0(dmu_object_info(mos, object, &doi));
-			if (doi.doi_type & DMU_OT_NEWTYPE) {
-				dmu_object_byteswap_t bswap =
-				    DMU_OT_BYTESWAP(doi.doi_type);
-				name = dmu_ot_byteswap[bswap].ob_name;
-			} else {
-				name = dmu_ot[doi.doi_type].ot_name;
-			}
+			name = zdb_ot_name(doi.doi_type);
 
-			(void) printf("MOS object %llu (%s) leaked\n",
-			    (u_longlong_t)object, name);
+			if (strcmp(name, "UNKNOWN") == 0) {
+				(void) printf("MOS object %llu (%s type=0x%x) "
+				    "leaked\n", (u_longlong_t)object, name,
+				    doi.doi_type);
+			} else {
+				(void) printf("MOS object %llu (%s) leaked\n",
+				    (u_longlong_t)object, name);
+			}
 			rv = 2;
 		}
 	}

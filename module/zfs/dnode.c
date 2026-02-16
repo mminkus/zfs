@@ -86,6 +86,130 @@ int zfs_default_ibs = DN_MAX_INDBLKSHIFT;
 static kmem_cbrc_t dnode_move(void *, void *, size_t, void *);
 #endif /* _KERNEL */
 
+/*
+ * Local forensic compatibility: when explicitly bypassing version checks
+ * for an unsupported pool (e.g. Oracle-only pool versions), treat unknown
+ * object/bonus types as opaque in read-only tooling paths instead of
+ * aborting on ASSERTs.
+ */
+static boolean_t
+dnode_forensic_unknown_type_ok(objset_t *os)
+{
+	return (!SPA_VERSION_IS_SUPPORTED(spa_version(os->os_spa)));
+}
+
+/*
+ * Map unsupported legacy object types to a conservative surrogate so core
+ * code paths can continue without indexing dmu_ot out of range.
+ */
+static dmu_object_type_t
+dnode_forensic_surrogate_type(uint8_t raw_type)
+{
+	(void) raw_type;
+	return (DMU_OTN_UINT8_METADATA);
+}
+
+static void
+dnode_forensic_dump_bytes(const char *prefix, uint64_t object,
+    const void *buf, size_t len, size_t max_dump)
+{
+	const uint8_t *bytes = buf;
+	size_t dump_len = MIN(len, max_dump);
+	static const char hexdigits[] = "0123456789abcdef";
+	char hex[(64 * 2) + 1];
+	size_t out = 0;
+
+	if (dump_len == 0)
+		return;
+
+	ASSERT3U(max_dump, <=, 64);
+	for (size_t i = 0; i < dump_len; i++) {
+		hex[out++] = hexdigits[bytes[i] >> 4];
+		hex[out++] = hexdigits[bytes[i] & 0xf];
+	}
+	hex[out] = '\0';
+
+	zfs_dbgmsg("forensic dnode %llu %s (%zu/%zu bytes)%s: %s",
+	    (u_longlong_t)object, prefix, dump_len, len,
+	    (dump_len < len) ? "..." : "", hex);
+}
+
+static void
+dnode_forensic_dump_unknown_type(objset_t *os, uint64_t object,
+    const dnode_phys_t *dnp)
+{
+	uint8_t type = dnp->dn_type;
+	uint8_t bonustype = dnp->dn_bonustype;
+	uint8_t nblkptr = dnp->dn_nblkptr;
+	uint16_t slots = dnp->dn_extra_slots + 1;
+	boolean_t slots_valid = (slots <= DNODE_MAX_SLOTS);
+	boolean_t nblkptr_valid = (nblkptr >= 1 && nblkptr <= DN_MAX_NBLKPTR);
+	size_t dnode_bytes = slots_valid ? (slots << DNODE_SHIFT) : 0;
+	size_t max_bonuslen = 0;
+	uint64_t logical_used = DN_USED_BYTES(dnp);
+
+	zfs_dbgmsg("forensic override: spa=%s object=%llu unsupported "
+	    "dnode type=0x%x bonustype=0x%x",
+	    spa_name(os->os_spa), (u_longlong_t)object, type, bonustype);
+	zfs_dbgmsg("forensic dnode %llu type decode: new=%u meta=%u enc=%u "
+	    "byteswap=0x%x",
+	    (u_longlong_t)object,
+	    !!(type & DMU_OT_NEWTYPE),
+	    !!(type & DMU_OT_METADATA),
+	    !!(type & DMU_OT_ENCRYPTED),
+	    type & DMU_OT_BYTESWAP_MASK);
+	zfs_dbgmsg("forensic dnode %llu fields: indblkshift=%u nlevels=%u "
+	    "nblkptr=%u checksum=%u compress=%u flags=0x%x datablkszsec=%u "
+	    "bonuslen=%u extra_slots=%u maxblkid=%llu used(raw)=%llu "
+	    "used(logical)=%llu",
+	    (u_longlong_t)object, dnp->dn_indblkshift, dnp->dn_nlevels,
+	    nblkptr, dnp->dn_checksum, dnp->dn_compress, dnp->dn_flags,
+	    dnp->dn_datablkszsec, dnp->dn_bonuslen, dnp->dn_extra_slots,
+	    (u_longlong_t)dnp->dn_maxblkid, (u_longlong_t)dnp->dn_used,
+	    (u_longlong_t)logical_used);
+
+	if (!slots_valid)
+		zfs_dbgmsg("forensic dnode %llu: invalid extra_slots=%u (max %u)",
+		    (u_longlong_t)object, dnp->dn_extra_slots, DNODE_MAX_SLOTS - 1);
+	if (!nblkptr_valid)
+		zfs_dbgmsg("forensic dnode %llu: invalid nblkptr=%u (expected 1..%u)",
+		    (u_longlong_t)object, nblkptr, DN_MAX_NBLKPTR);
+
+	if (slots_valid && nblkptr_valid) {
+		size_t header_bytes = DNODE_CORE_SIZE +
+		    ((size_t)nblkptr * sizeof (blkptr_t));
+		size_t spill_bytes = (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) ?
+		    sizeof (blkptr_t) : 0;
+
+		if (dnode_bytes > header_bytes + spill_bytes)
+			max_bonuslen = dnode_bytes - header_bytes - spill_bytes;
+	}
+
+	if (max_bonuslen > 0 && dnp->dn_bonuslen > 0) {
+		size_t bonus_dump_len = MIN((size_t)dnp->dn_bonuslen, max_bonuslen);
+		dnode_forensic_dump_bytes("bonus", object, DN_BONUS(dnp),
+		    bonus_dump_len, 64);
+	}
+
+	if (nblkptr_valid) {
+		for (uint8_t i = 0; i < nblkptr; i++) {
+			char blkbuf[320];
+
+			snprintf_blkptr(blkbuf, sizeof (blkbuf), &dnp->dn_blkptr[i]);
+			zfs_dbgmsg("forensic dnode %llu blkptr[%u]=%s",
+			    (u_longlong_t)object, i, blkbuf);
+		}
+	}
+
+	if (slots_valid && (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR)) {
+		char blkbuf[320];
+
+		snprintf_blkptr(blkbuf, sizeof (blkbuf), DN_SPILL_BLKPTR(dnp));
+		zfs_dbgmsg("forensic dnode %llu spill=%s",
+		    (u_longlong_t)object, blkbuf);
+	}
+}
+
 static char *
 rt_name(dnode_t *dn, const char *name)
 {
@@ -410,7 +534,11 @@ dnode_verify(dnode_t *dn)
 	ASSERT(dn->dn_objset);
 	ASSERT(dn->dn_handle->dnh_dnode == dn);
 
-	ASSERT(DMU_OT_IS_VALID(dn->dn_phys->dn_type));
+	if (!DMU_OT_IS_VALID(dn->dn_phys->dn_type)) {
+		if (dnode_forensic_unknown_type_ok(dn->dn_objset))
+			return;
+		ASSERT(DMU_OT_IS_VALID(dn->dn_phys->dn_type));
+	}
 
 	if (!(zfs_flags & ZFS_DEBUG_DNODE_VERIFY))
 		return;
@@ -488,10 +616,15 @@ dnode_byteswap(dnode_phys_t *dnp)
 	 */
 	if (dnp->dn_bonuslen != 0) {
 		dmu_object_byteswap_t byteswap;
-		ASSERT(DMU_OT_IS_VALID(dnp->dn_bonustype));
-		byteswap = DMU_OT_BYTESWAP(dnp->dn_bonustype);
-		dmu_ot_byteswap[byteswap].ob_func(DN_BONUS(dnp),
-		    DN_MAX_BONUS_LEN(dnp));
+
+		if (DMU_OT_IS_VALID(dnp->dn_bonustype)) {
+			byteswap = DMU_OT_BYTESWAP(dnp->dn_bonustype);
+			dmu_ot_byteswap[byteswap].ob_func(DN_BONUS(dnp),
+			    DN_MAX_BONUS_LEN(dnp));
+		} else {
+			zfs_dbgmsg("dnode_byteswap: unsupported bonustype 0x%x; "
+			    "skipping bonus byteswap", dnp->dn_bonustype);
+		}
 	}
 
 	/* Swap SPILL block if we have one */
@@ -592,6 +725,8 @@ dnode_create(objset_t *os, dnode_phys_t *dnp, dmu_buf_impl_t *db,
     uint64_t object, dnode_handle_t *dnh)
 {
 	dnode_t *dn;
+	uint8_t type = dnp->dn_type;
+	uint8_t bonustype = dnp->dn_bonustype;
 
 	dn = kmem_cache_alloc(dnode_cache, KM_SLEEP);
 	dn->dn_moved = 0;
@@ -614,12 +749,21 @@ dnode_create(objset_t *os, dnode_phys_t *dnp, dmu_buf_impl_t *db,
 	}
 	dn->dn_indblkshift = dnp->dn_indblkshift;
 	dn->dn_nlevels = dnp->dn_nlevels;
-	dn->dn_type = dnp->dn_type;
+	if (!DMU_OT_IS_VALID(type) && dnode_forensic_unknown_type_ok(os)) {
+		dnode_forensic_dump_unknown_type(os, object, dnp);
+		type = dnode_forensic_surrogate_type(type);
+		bonustype = DMU_OT_NONE;
+		zfs_dbgmsg("forensic dnode %llu: using surrogate type 0x%x",
+		    (u_longlong_t)object, type);
+	}
+	dn->dn_type = type;
 	dn->dn_nblkptr = dnp->dn_nblkptr;
 	dn->dn_checksum = dnp->dn_checksum;
 	dn->dn_compress = dnp->dn_compress;
-	dn->dn_bonustype = dnp->dn_bonustype;
+	dn->dn_bonustype = bonustype;
 	dn->dn_bonuslen = dnp->dn_bonuslen;
+	if (!DMU_OT_IS_VALID(dn->dn_bonustype))
+		dn->dn_bonuslen = 0;
 	dn->dn_num_slots = dnp->dn_extra_slots + 1;
 	dn->dn_maxblkid = dnp->dn_maxblkid;
 	dn->dn_have_spill = ((dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) != 0);
@@ -629,7 +773,7 @@ dnode_create(objset_t *os, dnode_phys_t *dnp, dmu_buf_impl_t *db,
 
 	dmu_zfetch_init(&dn->dn_zfetch, dn);
 
-	ASSERT(DMU_OT_IS_VALID(dn->dn_phys->dn_type));
+	ASSERT(DMU_OT_IS_VALID(dn->dn_type));
 	ASSERT(zrl_is_locked(&dnh->dnh_zrlock));
 	ASSERT(!DN_SLOT_IS_PTR(dnh->dnh_dnode));
 

@@ -156,7 +156,18 @@ const dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES] = {
 	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "DSL deadlist map"	},
 	{DMU_BSWAP_UINT64, TRUE,  TRUE,  FALSE, "DSL deadlist map hdr"	},
 	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "DSL dir clones"	},
-	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "bpobj subobj"		}
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "bpobj subobj"		},
+	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "DSL keychain"		},
+	{DMU_BSWAP_UINT64, TRUE,  TRUE,  FALSE, "DSL share"		},
+	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "DSL dataset share map"	},
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "BPMAP array"		},
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "BPMAP defer obj"	},
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "BPMAP defer header"	},
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, TRUE,  "ZIL intent log with map"},
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "DDT XTREE algorithm"	},
+	{DMU_BSWAP_UINT64, TRUE,  FALSE, FALSE, "DDT XTREE header"	},
+	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "Retained files set"	},
+	{DMU_BSWAP_ZAP,    TRUE,  TRUE,  FALSE, "Retained datasets set"	}
 };
 
 dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
@@ -2774,6 +2785,14 @@ __dmu_object_info_from_dnode(dnode_t *dn, dmu_object_info_t *doi)
 	doi->doi_metadata_block_size = dn->dn_indblkshift ?
 	    1ULL << dn->dn_indblkshift : 0;
 	doi->doi_type = dn->dn_type;
+	if (!SPA_VERSION_IS_SUPPORTED(spa_version(dn->dn_objset->os_spa)) &&
+	    !DMU_OT_IS_VALID(dnp->dn_type)) {
+		/*
+		 * Preserve the raw on-disk type for diagnostics/UI even when
+		 * the in-memory dnode uses a surrogate type.
+		 */
+		doi->doi_type = dnp->dn_type;
+	}
 	doi->doi_bonus_type = dn->dn_bonustype;
 	doi->doi_bonus_size = dn->dn_bonuslen;
 	doi->doi_dnodesize = dn->dn_num_slots << DNODE_SHIFT;

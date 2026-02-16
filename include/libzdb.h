@@ -2,7 +2,9 @@
 	zio_compress_table[(idx)].ci_name : "UNKNOWN")
 #define	ZDB_CHECKSUM_NAME(idx) ((idx) < ZIO_CHECKSUM_FUNCTIONS ?	\
 	zio_checksum_table[(idx)].ci_name : "UNKNOWN")
+#define	ZDB_OT_ORACLE_DSL_KEYCHAIN	DMU_OT_DSL_KEYCHAIN
 #define	ZDB_OT_TYPE(idx) ((idx) < DMU_OT_NUMTYPES ? (idx) :		\
+	(idx) == ZDB_OT_ORACLE_DSL_KEYCHAIN ? DMU_OT_ZAP_OTHER :	\
 	(idx) == DMU_OTN_ZAP_DATA || (idx) == DMU_OTN_ZAP_METADATA ?	\
 	DMU_OT_ZAP_OTHER : \
 	(idx) == DMU_OTN_UINT64_DATA || (idx) == DMU_OTN_UINT64_METADATA ? \

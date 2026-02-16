@@ -235,6 +235,21 @@ typedef enum dmu_object_type {
 	DMU_OT_DSL_CLONES,		/* ZAP */
 	DMU_OT_BPOBJ_SUBOBJ,		/* UINT64 */
 	/*
+	 * Legacy Solaris object types kept for read-only compatibility with
+	 * Oracle-versioned pools.  Do not allocate new objects with these.
+	 */
+	DMU_OT_DSL_KEYCHAIN,		/* ZAP */
+	DMU_OT_DSL_SHARE,		/* UINT64 */
+	DMU_OT_DSL_SHARE_MAP,		/* ZAP */
+	DMU_OT_BPMAP_ARRAY,		/* UINT64 */
+	DMU_OT_BPMAP_DEFER,		/* UINT64 */
+	DMU_OT_BPMAP_DEFER_HDR,		/* UINT64 */
+	DMU_OT_INTENT_LOG_MAP,		/* UINT64 */
+	DMU_OT_DDT_XTREE,		/* UINT64 */
+	DMU_OT_DDT_XTREE_HDR,		/* UINT64 */
+	DMU_OT_RETAINS,			/* ZAP */
+	DMU_OT_RETAINED_DATASETS,	/* ZAP */
+	/*
 	 * Do not allocate new object types here. Doing so makes the on-disk
 	 * format incompatible with any other format that uses the same object
 	 * type number.

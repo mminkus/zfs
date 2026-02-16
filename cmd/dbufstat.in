@@ -315,7 +315,18 @@ def get_typestring(t):
                     "DMU_OT_DEADLIST",
                     "DMU_OT_DEADLIST_HDR",
                     "DMU_OT_DSL_CLONES",
-                    "DMU_OT_BPOBJ_SUBOBJ"]
+                    "DMU_OT_BPOBJ_SUBOBJ",
+                    "DMU_OT_DSL_KEYCHAIN",
+                    "DMU_OT_DSL_SHARE",
+                    "DMU_OT_DSL_SHARE_MAP",
+                    "DMU_OT_BPMAP_ARRAY",
+                    "DMU_OT_BPMAP_DEFER",
+                    "DMU_OT_BPMAP_DEFER_HDR",
+                    "DMU_OT_INTENT_LOG_MAP",
+                    "DMU_OT_DDT_XTREE",
+                    "DMU_OT_DDT_XTREE_HDR",
+                    "DMU_OT_RETAINS",
+                    "DMU_OT_RETAINED_DATASETS"]
     otn_strings = {
                     0x80: "DMU_OTN_UINT8_DATA",
                     0xc0: "DMU_OTN_UINT8_METADATA",

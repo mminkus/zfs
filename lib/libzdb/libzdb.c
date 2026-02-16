@@ -54,7 +54,13 @@
 const char *
 zdb_ot_name(dmu_object_type_t type)
 {
-	if (type < DMU_OT_NUMTYPES)
+	/*
+	 * Keep explicit handling for readability in compatibility paths where
+	 * Oracle-versioned pools may contain this legacy object type.
+	 */
+	if (type == ZDB_OT_ORACLE_DSL_KEYCHAIN)
+		return ("DSL keychain");
+	else if (type < DMU_OT_NUMTYPES)
 		return (dmu_ot[type].ot_name);
 	else if ((type & DMU_OT_NEWTYPE) &&
 	    ((type & DMU_OT_BYTESWAP_MASK) < DMU_BSWAP_NUMFUNCS))
