@@ -577,6 +577,13 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 			err = dsl_prop_register(ds,
 			    zfs_prop_to_name(ZFS_PROP_PREFETCH),
 			    prefetch_changed_cb, os);
+			if (err == ENOENT) {
+				/*
+				 * Optional on older kernel modules.
+				 * Keep registering required callbacks.
+				 */
+				err = 0;
+			}
 		}
 		if (!ds->ds_is_snapshot) {
 			if (err == 0) {
@@ -635,26 +642,15 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 				err = dsl_prop_register(ds,
 				    zfs_prop_to_name(ZFS_PROP_DIRECT),
 				    direct_changed_cb, os);
+				if (err == ENOENT) {
+					/*
+					 * Optional on older kernel modules.
+					 */
+					err = 0;
+				}
 			}
 		}
-		if (err == ENOENT) {
-			/*
-			 * ENOENT from dsl_prop_register() means the running
-			 * ZFS kernel module is older than this userland and
-			 * does not expose the property in sysfs (e.g. Ubuntu
-			 * 24.04 ships ZFS 2.2.x which predates 'prefetch').
-			 * The global property table (owned by libzfs, which
-			 * is loaded first) marks the property as unsupported,
-			 * so zfs_name_to_prop() returns ZPROP_INVAL and
-			 * dodefault() returns ENOENT.
-			 *
-			 * For read-only userland inspection this is harmless:
-			 * the unregistered callback fields (e.g. os_prefetch)
-			 * remain zero, which is safe for all DMU read paths.
-			 * Continue with whatever callbacks did register.
-			 */
-			err = 0;
-		} else if (err != 0) {
+		if (err != 0) {
 			/*
 			 * A genuine error from dsl_prop_register() or an
 			 * earlier failure.  Some callbacks may have been
